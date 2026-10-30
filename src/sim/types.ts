@@ -1,7 +1,5 @@
 export type ScenarioId = 1 | 2 | 3;
 
-export type SimMode = 'guided' | 'independent';
-
 export type PlaybackStatus = 'idle' | 'running' | 'paused' | 'finished';
 
 // Integer milliseconds relative to scenario start keep boundary comparisons exact.
@@ -30,7 +28,6 @@ export interface VehicleState {
 export interface ScenarioDef {
   id: ScenarioId;
   title: string;
-  description: string;
   durationMs: number;
   vehicles: VehicleSpec[];
 }

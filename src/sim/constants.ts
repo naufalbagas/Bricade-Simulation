@@ -8,7 +8,7 @@ export const BRIDGE_LENGTH = 26;
 export const BRIDGE_ENTRY_X = -BRIDGE_LENGTH / 2;
 export const BRIDGE_EXIT_X = BRIDGE_LENGTH / 2;
 
-export const APPROACH_LENGTH = 16;
+export const APPROACH_LENGTH = 9;
 export const ROAD_START_X = BRIDGE_ENTRY_X - APPROACH_LENGTH;
 export const ROAD_END_X = BRIDGE_EXIT_X + APPROACH_LENGTH;
 

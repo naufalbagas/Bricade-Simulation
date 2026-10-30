@@ -1,15 +1,14 @@
 import { INITIAL_HEALTH } from './constants';
 import { advanceCursor, createCursor, cursorToSnapshot, eventTimes, type SimCursor } from './engine';
 import { SCENARIOS } from './scenarios';
-import type { CarryState, PlaybackStatus, ScenarioId, SimMode, SimSnapshot } from './types';
+import type { CarryState, PlaybackStatus, ScenarioId, SimSnapshot } from './types';
 
 export interface SimState {
-  mode: SimMode;
   scenarioId: ScenarioId;
   status: PlaybackStatus;
   elapsedMs: number;
   carryIn: CarryState;
-  guidedCompleted: number;
+  completedRuns: number;
   snapshot: SimSnapshot;
   runId: number;
 }
@@ -39,7 +38,7 @@ export class SimStore {
   private cursor: SimCursor = createCursor(FRESH_CARRY);
 
   constructor(private deps: ClockDeps = browserDeps) {
-    this.state = this.resetTo('guided', 1, 0);
+    this.state = this.resetTo(1, 0);
   }
 
   subscribe = (fn: () => void) => {
@@ -59,56 +58,16 @@ export class SimStore {
     return Math.min(dur, Math.max(0, this.accumulatedMs + (this.deps.now() - this.resumedAt)));
   }
 
-  setMode(mode: SimMode) {
-    if (mode === this.state.mode) return;
-    this.stopLoop();
-    this.set(this.resetTo(mode, 1, this.state.runId + 1));
-  }
-
-  canSelect(id: ScenarioId): boolean {
-    const s = this.state;
-    if (s.mode === 'independent') return true;
-    if (s.status === 'running' || s.status === 'paused') return false;
-    return id === s.guidedCompleted + 1;
-  }
-
-  select(id: ScenarioId) {
-    if (!this.canSelect(id)) return;
-    const s = this.state;
-    this.stopLoop();
-    if (s.mode === 'independent') {
-      this.set(this.resetTo('independent', id, s.runId + 1));
-      return;
-    }
-    const carryIn =
-      s.guidedCompleted > 0 ? { stressMax: s.snapshot.stressMax, health: s.snapshot.health } : FRESH_CARRY;
-    this.accumulatedMs = 0;
-    const scenario = SCENARIOS[id];
-    this.events = eventTimes(scenario);
-    this.cursor = advanceCursor(scenario, this.events, createCursor(carryIn), 0);
-    this.set({
-      ...s,
-      scenarioId: id,
-      status: 'idle',
-      elapsedMs: 0,
-      carryIn,
-      snapshot: cursorToSnapshot(scenario, this.cursor, 0),
-      runId: s.runId + 1,
-    });
-  }
-
-  canStart(id: ScenarioId): boolean {
-    const s = this.state;
-    if (s.mode === 'independent') return true;
-    if (s.status === 'running' || s.status === 'paused') return false;
-    return id === s.guidedCompleted + 1;
+  canStart(_id: ScenarioId): boolean {
+    const { status } = this.state;
+    return status === 'idle' || status === 'finished';
   }
 
   start(id: ScenarioId) {
     if (!this.canStart(id)) return;
     const s = this.state;
     const carryIn =
-      s.mode === 'guided' && s.guidedCompleted > 0
+      s.completedRuns > 0
         ? { stressMax: s.snapshot.stressMax, health: s.snapshot.health }
         : FRESH_CARRY;
     this.begin(id, carryIn);
@@ -139,15 +98,12 @@ export class SimStore {
   replay() {
     const s = this.state;
     if (s.status === 'idle') return;
-    if (s.mode === 'guided') this.state = { ...s, guidedCompleted: s.scenarioId - 1 };
     this.begin(s.scenarioId, s.carryIn);
   }
 
   reset() {
     this.stopLoop();
-    const s = this.state;
-    const id = s.mode === 'guided' ? 1 : s.scenarioId;
-    this.set(this.resetTo(s.mode, id, s.runId + 1));
+    this.set(this.resetTo(1, this.state.runId + 1));
   }
 
   tick() {
@@ -166,7 +122,7 @@ export class SimStore {
         status: 'finished',
         elapsedMs: dur,
         snapshot: cursorToSnapshot(scenario, this.cursor, dur),
-        guidedCompleted: s.mode === 'guided' ? Math.max(s.guidedCompleted, s.scenarioId) : s.guidedCompleted,
+        completedRuns: s.completedRuns + 1,
       });
       return;
     }
@@ -202,18 +158,17 @@ export class SimStore {
     this.startLoop();
   }
 
-  private resetTo(mode: SimMode, id: ScenarioId, runId: number): SimState {
+  private resetTo(id: ScenarioId, runId: number): SimState {
     this.accumulatedMs = 0;
     const scenario = SCENARIOS[id];
     this.events = eventTimes(scenario);
     this.cursor = advanceCursor(scenario, this.events, createCursor(FRESH_CARRY), 0);
     return {
-      mode,
       scenarioId: id,
       status: 'idle',
       elapsedMs: 0,
       carryIn: FRESH_CARRY,
-      guidedCompleted: 0,
+      completedRuns: 0,
       snapshot: cursorToSnapshot(scenario, this.cursor, 0),
       runId,
     };

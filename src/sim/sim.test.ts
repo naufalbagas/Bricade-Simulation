@@ -142,7 +142,7 @@ describe('scenario 2: overlapping vehicles', () => {
 });
 
 describe('scenario 3: sequential vehicles after previous stress', () => {
-  it('carries Stress Max (50%) and Bridge Health in Guided Mode while crossing one at a time', () => {
+  it('carries Stress Max (50%) and Bridge Health from Scenario 2 while crossing one at a time', () => {
     const afterS1 = finalCarry(SCENARIOS[1], FRESH_CARRY);
     const afterS2 = finalCarry(SCENARIOS[2], afterS1);
     expect(afterS1).toEqual({ stressMax: 0.1, health: 99.15 });
@@ -223,7 +223,6 @@ describe('playback and single-loop guarantees', () => {
     const spy = vi.spyOn(damage, 'applyDamage');
     const f = fakeDeps();
     const store = new SimStore(f.deps);
-    store.setMode('independent');
     store.start(2);
     f.advance(8500, 16);
     expect(store.getState().status).toBe('finished');
@@ -261,7 +260,7 @@ describe('playback and single-loop guarantees', () => {
     expect(s.status).toBe('idle');
     expect(s.scenarioId).toBe(1);
     expect(s.elapsedMs).toBe(0);
-    expect(s.guidedCompleted).toBe(0);
+    expect(s.completedRuns).toBe(0);
     expect(s.snapshot.stressLoad).toBe(0);
     expect(s.snapshot.stressMax).toBe(0);
     expect(s.snapshot.health).toBe(100);
@@ -269,7 +268,7 @@ describe('playback and single-loop guarantees', () => {
   });
 
   it('produces identical deterministic results across different frame rates and on replay', () => {
-    const runGuided = (step: number) => {
+    const runSequence = (step: number) => {
       const f = fakeDeps();
       const store = new SimStore(f.deps);
       for (const id of [1, 2, 3] as const) {
@@ -281,8 +280,8 @@ describe('playback and single-loop guarantees', () => {
       return store.getState().snapshot;
     };
 
-    const at60fps = runGuided(16);
-    const at144fps = runGuided(7);
+    const at60fps = runSequence(16);
+    const at144fps = runSequence(7);
     expect(at60fps.health).toBe(94.65);
     expect(at60fps.stressMax).toBe(0.5);
     expect(at144fps).toEqual(at60fps);
@@ -300,16 +299,12 @@ describe('playback and single-loop guarantees', () => {
     expect(store.getState().snapshot).toEqual(firstRun);
   });
 
-  it('prevents duplicate loops and starts fresh on every Independent Mode run', () => {
+  it('prevents duplicate loops when start is invoked repeatedly while running', () => {
     const f = fakeDeps();
     const store = new SimStore(f.deps);
-    expect(store.canStart(2)).toBe(false);
-    expect(store.canStart(3)).toBe(false);
-
-    store.setMode('independent');
-    store.start(3);
-    store.start(3);
     store.start(2);
+    store.start(2);
+    store.start(3);
     expect(f.pendingFrames()).toBe(1);
     expect(store.activeLoops).toBe(1);
 
@@ -319,7 +314,7 @@ describe('playback and single-loop guarantees', () => {
 
     store.start(3);
     f.advance(8500);
-    expect(store.getState().snapshot.stressMax).toBe(0.1);
-    expect(store.getState().snapshot.health).toBe(99.15);
+    expect(store.getState().snapshot.stressMax).toBe(0.5);
+    expect(store.getState().snapshot.health).toBe(95.5);
   });
 });

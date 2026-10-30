@@ -32,16 +32,12 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDef> = {
   1: {
     id: 1,
     title: 'Sequential Vehicles',
-    description:
-      'Five 1-ton cars cross one at a time. Each car waits until the previous car clears the span, keeping Stress Load at 10% during crossings and 0% between them.',
     durationMs: SCENARIO_DURATION_MS,
     vehicles: sequential('S1', COLORS_A),
   },
   2: {
     id: 2,
     title: 'Overlapping Vehicles',
-    description:
-      'Five 1-ton cars enter at 0.8 s intervals without waiting. All five occupy the bridge together from 3.4 s to 5.0 s (50% Stress Load), then exit sequentially.',
     durationMs: SCENARIO_DURATION_MS,
     vehicles: OVERLAP_ENTRY_MS.map((entryMs, i) => ({
       id: `S2-V${i + 1}`,
@@ -55,8 +51,6 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDef> = {
   3: {
     id: 3,
     title: 'Sequential Vehicles After Previous Stress',
-    description:
-      'Five new 1-ton cars cross one at a time at 10% Stress Load. In Guided Mode, Stress Max (50%) and prior Bridge Health carry over from Scenario 2.',
     durationMs: SCENARIO_DURATION_MS,
     vehicles: sequential('S3', COLORS_B),
   },

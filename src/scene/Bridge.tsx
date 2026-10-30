@@ -142,7 +142,7 @@ function DirectionChevron({ x }: { x: number }) {
 export function Bridge() {
   const roadLength = ROAD_END_X - ROAD_START_X;
   const edgeLine = useMemo(() => new THREE.MeshBasicMaterial({ color: '#f1f5f9' }), []);
-  const chevrons = [-22, -17, -7, 0, 7, 17, 22];
+  const chevrons = [-18, -7, 0, 7, 18];
 
   return (
     <group>
