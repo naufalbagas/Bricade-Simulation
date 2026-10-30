@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-load: #1d5fd1;
+  --color-peak-fill: #d95b00;
+  --color-peak-ink: #b84a00;
+  --color-edge: #738093;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-white text-slate-900 antialiased;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
