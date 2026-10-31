@@ -1,14 +1,16 @@
-import { INITIAL_HEALTH } from './constants';
-import { advanceCursor, createCursor, cursorToSnapshot, eventTimes, type SimCursor } from './engine';
-import { SCENARIOS } from './scenarios';
-import type { CarryState, PlaybackStatus, ScenarioId, SimSnapshot } from './types';
+import {
+  advanceEngineByMs,
+  createInitialEngineState,
+  engineToSnapshot,
+  setEngineCapacityTons,
+  setEngineMinQuality,
+  spawnVehicleInEngine,
+  type EngineState,
+} from './engine';
+import type { SimSnapshot, SimStatus, VehicleEntity, VehicleSpawnInput } from './types';
 
 export interface SimState {
-  scenarioId: ScenarioId;
-  status: PlaybackStatus;
-  elapsedMs: number;
-  carryIn: CarryState;
-  completedRuns: number;
+  status: SimStatus;
   snapshot: SimSnapshot;
   runId: number;
 }
@@ -17,28 +19,34 @@ export interface ClockDeps {
   now: () => number;
   requestFrame: (cb: () => void) => number;
   cancelFrame: (id: number) => void;
+  rng?: () => number;
 }
-
-export const FRESH_CARRY: CarryState = { stressMax: 0, health: INITIAL_HEALTH };
 
 const browserDeps: ClockDeps = {
   now: () => performance.now(),
   requestFrame: (cb) => requestAnimationFrame(cb),
   cancelFrame: (id) => cancelAnimationFrame(id),
+  rng: () => Math.random(),
 };
 
-// Owns the single simulation clock, incremental event cursor, and active rAF handle.
+const MAX_FRAME_DELTA_MS = 100;
+
+// Owns the single simulation clock, active rAF loop, bridge properties, and live vehicle entity lookup.
 export class SimStore {
+  private engine: EngineState;
   private state: SimState;
   private listeners = new Set<() => void>();
   private frameId: number | null = null;
-  private accumulatedMs = 0;
-  private resumedAt = 0;
-  private events: number[] = [];
-  private cursor: SimCursor = createCursor(FRESH_CARRY);
+  private lastTickAt = 0;
+  private subMsRemainder = 0;
 
   constructor(private deps: ClockDeps = browserDeps) {
-    this.state = this.resetTo(1, 0);
+    this.engine = createInitialEngineState();
+    this.state = {
+      status: 'idle',
+      snapshot: engineToSnapshot(this.engine),
+      runId: 0,
+    };
   }
 
   subscribe = (fn: () => void) => {
@@ -52,86 +60,96 @@ export class SimStore {
     return this.frameId === null ? 0 : 1;
   }
 
-  liveElapsedMs(): number {
-    if (this.state.status !== 'running') return this.state.elapsedMs;
-    const dur = SCENARIOS[this.state.scenarioId].durationMs;
-    return Math.min(dur, Math.max(0, this.accumulatedMs + (this.deps.now() - this.resumedAt)));
+  getVehicleById(id: number): VehicleEntity | undefined {
+    return this.engine.vehicles.find((v) => v.id === id);
   }
 
-  canStart(_id: ScenarioId): boolean {
-    const { status } = this.state;
-    return status === 'idle' || status === 'finished';
+  syncClock() {
+    this.lastTickAt = this.deps.now();
   }
 
-  start(id: ScenarioId) {
-    if (!this.canStart(id)) return;
-    const s = this.state;
-    const carryIn =
-      s.completedRuns > 0
-        ? { stressMax: s.snapshot.stressMax, health: s.snapshot.health }
-        : FRESH_CARRY;
-    this.begin(id, carryIn);
-  }
-
-  pause() {
-    if (this.state.status !== 'running') return;
-    const elapsed = this.liveElapsedMs();
-    this.stopLoop();
-    this.accumulatedMs = elapsed;
-    const scenario = SCENARIOS[this.state.scenarioId];
-    this.cursor = advanceCursor(scenario, this.events, this.cursor, elapsed);
+  setCapacityTons(capacityTons: number) {
+    const nextEngine = setEngineCapacityTons(this.engine, capacityTons);
+    if (nextEngine.capacityTons === this.engine.capacityTons) return;
+    this.engine = nextEngine;
     this.set({
       ...this.state,
-      status: 'paused',
-      elapsedMs: elapsed,
-      snapshot: cursorToSnapshot(scenario, this.cursor, elapsed),
+      snapshot: engineToSnapshot(this.engine),
     });
   }
 
-  resume() {
-    if (this.state.status !== 'paused') return;
-    this.resumedAt = this.deps.now();
-    this.set({ ...this.state, status: 'running' });
-    this.startLoop();
+  setMinQuality(minQuality: number) {
+    const nextEngine = setEngineMinQuality(this.engine, minQuality);
+    if (nextEngine.minQuality === this.engine.minQuality) return;
+    this.engine = nextEngine;
+    this.set({
+      ...this.state,
+      snapshot: engineToSnapshot(this.engine),
+    });
   }
 
-  replay() {
-    const s = this.state;
-    if (s.status === 'idle') return;
-    this.begin(s.scenarioId, s.carryIn);
+  spawnVehicle(input: VehicleSpawnInput) {
+    this.engine = spawnVehicleInEngine(this.engine, input, this.deps.rng ?? Math.random);
+    const wasIdle = this.state.status === 'idle';
+    this.set({
+      ...this.state,
+      status: 'running',
+      snapshot: engineToSnapshot(this.engine),
+    });
+    if (wasIdle || this.frameId === null) {
+      this.lastTickAt = this.deps.now();
+      this.subMsRemainder = 0;
+      this.startLoop();
+    }
   }
 
   reset() {
     this.stopLoop();
-    this.set(this.resetTo(1, this.state.runId + 1));
+    this.engine = createInitialEngineState({
+      capacityTons: this.engine.capacityTons,
+      minQuality: this.engine.minQuality,
+    });
+    this.subMsRemainder = 0;
+    this.set({
+      status: 'idle',
+      snapshot: engineToSnapshot(this.engine),
+      runId: this.state.runId + 1,
+    });
   }
 
   tick() {
     if (this.state.status !== 'running') return;
-    const scenario = SCENARIOS[this.state.scenarioId];
-    const dur = scenario.durationMs;
-    const elapsed = this.liveElapsedMs();
-    this.cursor = advanceCursor(scenario, this.events, this.cursor, elapsed);
 
-    if (elapsed >= dur) {
-      this.stopLoop();
-      this.accumulatedMs = dur;
-      const s = this.state;
-      this.set({
-        ...s,
-        status: 'finished',
-        elapsedMs: dur,
-        snapshot: cursorToSnapshot(scenario, this.cursor, dur),
-        completedRuns: s.completedRuns + 1,
-      });
-      return;
+    const now = this.deps.now();
+    const rawDelta = Math.max(0, Math.min(MAX_FRAME_DELTA_MS, now - this.lastTickAt));
+    this.lastTickAt = now;
+
+    const totalMs = rawDelta + this.subMsRemainder;
+    const wholeMs = Math.floor(totalMs);
+    this.subMsRemainder = totalMs - wholeMs;
+
+    if (wholeMs > 0) {
+      const { state: nextEngine, discreteChanged } = advanceEngineByMs(this.engine, wholeMs);
+      this.engine = nextEngine;
+
+      if (this.engine.vehicles.length === 0) {
+        this.stopLoop();
+        this.subMsRemainder = 0;
+        this.set({
+          ...this.state,
+          status: 'idle',
+          snapshot: engineToSnapshot(this.engine),
+        });
+        return;
+      }
+
+      if (discreteChanged) {
+        this.set({
+          ...this.state,
+          snapshot: engineToSnapshot(this.engine),
+        });
+      }
     }
-
-    this.set({
-      ...this.state,
-      elapsedMs: elapsed,
-      snapshot: cursorToSnapshot(scenario, this.cursor, elapsed),
-    });
   }
 
   dispose() {
@@ -139,45 +157,12 @@ export class SimStore {
     this.listeners.clear();
   }
 
-  private begin(id: ScenarioId, carryIn: CarryState) {
-    this.stopLoop();
-    this.accumulatedMs = 0;
-    this.resumedAt = this.deps.now();
-    const scenario = SCENARIOS[id];
-    this.events = eventTimes(scenario);
-    this.cursor = advanceCursor(scenario, this.events, createCursor(carryIn), 0);
-    this.set({
-      ...this.state,
-      scenarioId: id,
-      status: 'running',
-      elapsedMs: 0,
-      carryIn,
-      snapshot: cursorToSnapshot(scenario, this.cursor, 0),
-      runId: this.state.runId + 1,
-    });
-    this.startLoop();
-  }
-
-  private resetTo(id: ScenarioId, runId: number): SimState {
-    this.accumulatedMs = 0;
-    const scenario = SCENARIOS[id];
-    this.events = eventTimes(scenario);
-    this.cursor = advanceCursor(scenario, this.events, createCursor(FRESH_CARRY), 0);
-    return {
-      scenarioId: id,
-      status: 'idle',
-      elapsedMs: 0,
-      carryIn: FRESH_CARRY,
-      completedRuns: 0,
-      snapshot: cursorToSnapshot(scenario, this.cursor, 0),
-      runId,
-    };
-  }
-
   private loop = () => {
     this.frameId = null;
     this.tick();
-    if (this.state.status === 'running') this.frameId = this.deps.requestFrame(this.loop);
+    if (this.state.status === 'running') {
+      this.frameId = this.deps.requestFrame(this.loop);
+    }
   };
 
   private startLoop() {

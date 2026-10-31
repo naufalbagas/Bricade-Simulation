@@ -1,13 +1,16 @@
-import { MAX_CAPACITY_TONS } from '../sim/constants';
+import { DEFAULT_BRIDGE_CAPACITY_TONS } from '../sim/constants';
 
-export const pct = (normalized: number, digits = 0) => `${(normalized * 100).toFixed(digits)}%`;
-
-export const tons = (normalized: number) => {
-  const value = normalized * MAX_CAPACITY_TONS;
-  return `${value.toFixed(1)} ${value === 1 ? 'ton' : 'tons'}`;
+export const pct = (normalized: number) => {
+  const raw = Math.round(normalized * 1000) / 10;
+  return Number.isInteger(raw) ? `${raw.toFixed(0)}%` : `${raw.toFixed(1)}%`;
 };
 
-export const weightTonsText = (weightTons: number) =>
-  `${weightTons.toFixed(1)} ${weightTons === 1 ? 'ton' : 'tons'}`;
+export const tons = (normalized: number, capacityTons: number = DEFAULT_BRIDGE_CAPACITY_TONS) => {
+  const value = Math.round(normalized * capacityTons * 100) / 100;
+  return `${Number.isInteger(value * 10) ? value.toFixed(1) : value.toFixed(2)} Ton`;
+};
 
-export const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
+export const weightTonsText = (weightTons: number) => {
+  const rounded = Math.round(weightTons * 100) / 100;
+  return `${Number.isInteger(rounded * 10) ? rounded.toFixed(1) : rounded.toFixed(2)} Ton`;
+};

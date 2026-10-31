@@ -1,117 +1,276 @@
-import { BRIDGE_ENTRY_X, BRIDGE_LENGTH, MAX_CAPACITY_TONS } from './constants';
-import { applyDamage } from './damage';
-import type { CarryState, LoadTransition, ScenarioDef, SimSnapshot, VehicleSpec, VehicleState } from './types';
+import {
+  BRIDGE_ENTRY_X,
+  BRIDGE_EXIT_X,
+  DEFAULT_BRIDGE_CAPACITY_TONS,
+  DEFAULT_MIN_QUALITY,
+  INITIAL_QUALITY,
+  MAX_BRIDGE_CAPACITY_TONS,
+  MAX_QUALITY_THRESHOLD,
+  MIN_BRIDGE_CAPACITY_TONS,
+  MIN_QUALITY_THRESHOLD,
+  MIN_VEHICLE_GAP,
+  ROAD_END_X,
+  ROAD_START_X,
+} from './constants';
+import { applyEntryDamage, clamp } from './damage';
+import type { QualityReductionEvent, SimSnapshot, VehicleEntity, VehicleSpawnInput } from './types';
 
-export interface SimCursor {
-  eventIndex: number;
-  stressLoad: number;
-  stressMax: number;
-  health: number;
-  transitions: LoadTransition[];
+export interface EngineState {
+  nextVehicleId: number;
+  lastHue: number | null;
+  vehicles: VehicleEntity[];
+  capacityTons: number;
+  minQuality: number;
+  stressCurrent: number;
+  stressPrevious: number;
+  quality: number;
+  events: QualityReductionEvent[];
 }
 
-export function vehicleSpeed(v: VehicleSpec): number {
-  return BRIDGE_LENGTH / ((v.exitMs - v.entryMs) / 1000);
+export function kmhToUnitsPerSec(speedKmh: number): number {
+  return speedKmh / 3.6;
 }
 
-export function vehicleX(v: VehicleSpec, tMs: number): number {
-  return BRIDGE_ENTRY_X + ((tMs - v.entryMs) / 1000) * vehicleSpeed(v);
+export function round6(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
 }
 
-// Center-point occupancy interval [entryMs, exitMs) corresponds to [BRIDGE_ENTRY_X, BRIDGE_EXIT_X).
-export function isOnBridge(v: VehicleSpec, tMs: number): boolean {
-  return v.entryMs <= tMs && tMs < v.exitMs;
+export function normalizedLoad(
+  totalWeightTons: number,
+  capacityTons: number = DEFAULT_BRIDGE_CAPACITY_TONS,
+): number {
+  return round6(totalWeightTons / capacityTons);
 }
 
-export function vehicleState(v: VehicleSpec, tMs: number): VehicleState {
-  const onBridge = isOnBridge(v, tMs);
+function hslToHex(h: number, s: number, l: number): string {
+  const sat = s / 100;
+  const light = l / 100;
+  const a = sat * Math.min(light, 1 - light);
+  const channel = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * color)
+      .toString(16)
+      .padStart(2, '0');
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
+export function randomVehicleColor(
+  rng: () => number,
+  lastHue: number | null,
+): { color: string; hue: number } {
+  const hue = lastHue === null ? rng() * 360 : (lastHue + 48 + rng() * 264) % 360;
+  const saturation = 64 + rng() * 18;
+  const lightness = 36 + rng() * 12;
+  return { color: hslToHex(hue, saturation, lightness), hue };
+}
+
+export function createInitialEngineState(overrides?: {
+  capacityTons?: number;
+  minQuality?: number;
+}): EngineState {
+  const capacityTons = clamp(
+    Math.round(overrides?.capacityTons ?? DEFAULT_BRIDGE_CAPACITY_TONS),
+    MIN_BRIDGE_CAPACITY_TONS,
+    MAX_BRIDGE_CAPACITY_TONS,
+  );
+  const minQuality = clamp(
+    Math.round(overrides?.minQuality ?? DEFAULT_MIN_QUALITY),
+    MIN_QUALITY_THRESHOLD,
+    MAX_QUALITY_THRESHOLD,
+  );
   return {
-    id: v.id,
-    label: v.label,
-    weightTons: v.weightTons,
-    color: v.color,
-    x: vehicleX(v, tMs),
-    speed: vehicleSpeed(v),
-    onBridge,
-    phase: onBridge ? 'on-bridge' : tMs < v.entryMs ? 'approaching' : 'exited',
+    nextVehicleId: 1,
+    lastHue: null,
+    vehicles: [],
+    capacityTons,
+    minQuality,
+    stressCurrent: 0,
+    stressPrevious: 0,
+    quality: INITIAL_QUALITY,
+    events: [],
   };
 }
 
-export function totalWeightAt(s: ScenarioDef, tMs: number): number {
-  return s.vehicles.reduce((sum, v) => (isOnBridge(v, tMs) ? sum + v.weightTons : sum), 0);
-}
-
-export function normalizedLoad(totalWeightTons: number): number {
-  return Math.round((totalWeightTons / MAX_CAPACITY_TONS) * 1e6) / 1e6;
-}
-
-export function eventTimes(s: ScenarioDef): number[] {
-  const set = new Set<number>();
-  for (const v of s.vehicles) {
-    set.add(v.entryMs);
-    set.add(v.exitMs);
+function activeBridgeWeight(vehicles: VehicleEntity[]): number {
+  let sum = 0;
+  for (const v of vehicles) {
+    if (v.onBridge) sum += v.weightTons;
   }
-  return [...set].sort((a, b) => a - b);
+  return round6(sum);
 }
 
-export function createCursor(carry: CarryState): SimCursor {
+export function setEngineCapacityTons(state: EngineState, rawCapacity: number): EngineState {
+  const capacityTons = clamp(
+    Math.round(rawCapacity),
+    MIN_BRIDGE_CAPACITY_TONS,
+    MAX_BRIDGE_CAPACITY_TONS,
+  );
+  // Stress Previous only changes on vehicle entry, so it is left untouched here.
+  const stressCurrent = normalizedLoad(activeBridgeWeight(state.vehicles), capacityTons);
   return {
-    eventIndex: 0,
-    stressLoad: 0,
-    stressMax: carry.stressMax,
-    health: carry.health,
-    transitions: [],
+    ...state,
+    capacityTons,
+    stressCurrent,
   };
 }
 
-// Processes only newly crossed occupancy timestamps so damage runs once per actual load transition.
-export function advanceCursor(s: ScenarioDef, events: number[], cursor: SimCursor, tMs: number): SimCursor {
-  let idx = cursor.eventIndex;
-  if (idx >= events.length || events[idx] > tMs) return cursor;
+export function setEngineMinQuality(state: EngineState, rawMinQuality: number): EngineState {
+  const minQuality = clamp(
+    Math.round(rawMinQuality),
+    MIN_QUALITY_THRESHOLD,
+    MAX_QUALITY_THRESHOLD,
+  );
+  return {
+    ...state,
+    minQuality,
+  };
+}
 
-  let load = cursor.stressLoad;
-  let stressMax = cursor.stressMax;
-  let health = cursor.health;
-  const transitions = [...cursor.transitions];
+export function spawnVehicleInEngine(
+  state: EngineState,
+  input: VehicleSpawnInput,
+  rng: () => number = Math.random,
+): EngineState {
+  const picked = input.color
+    ? { color: input.color, hue: state.lastHue }
+    : randomVehicleColor(rng, state.lastHue);
 
-  while (idx < events.length && events[idx] <= tMs) {
-    const t = events[idx];
-    const next = normalizedLoad(totalWeightAt(s, t));
-    if (next !== load) {
-      const r = applyDamage(health, load, next);
-      health = r.health;
-      stressMax = Math.max(stressMax, next);
-      transitions.push({ timeMs: t, prev: load, next, reduction: r.reduction, healthAfter: health });
-      load = next;
+  const minExistingX = state.vehicles.reduce((min, v) => Math.min(min, v.x), Infinity);
+  const startX =
+    state.vehicles.length === 0
+      ? ROAD_START_X + 0.05
+      : Math.min(ROAD_START_X + 0.05, minExistingX - MIN_VEHICLE_GAP);
+
+  const entity: VehicleEntity = {
+    id: state.nextVehicleId,
+    weightTons: round6(input.weightTons),
+    speedKmh: round6(input.speedKmh),
+    speedUnitsPerSec: kmhToUnitsPerSec(input.speedKmh),
+    color: picked.color,
+    x: startX,
+    distanceTraveled: 0,
+    hasEnteredBridge: false,
+    onBridge: false,
+  };
+
+  return {
+    ...state,
+    nextVehicleId: state.nextVehicleId + 1,
+    lastHue: picked.hue,
+    vehicles: [...state.vehicles, entity],
+  };
+}
+
+// Advances simulation by integer milliseconds (1 ms fixed micro-steps) for frame-rate independence.
+export function advanceEngineByMs(
+  state: EngineState,
+  stepsMs: number,
+): { state: EngineState; discreteChanged: boolean } {
+  if (stepsMs <= 0 || state.vehicles.length === 0) {
+    return { state, discreteChanged: false };
+  }
+
+  let vehicles = state.vehicles.map((v) => ({ ...v }));
+  const capacityTons = state.capacityTons;
+  let stressCurrent = state.stressCurrent;
+  let stressPrevious = state.stressPrevious;
+  let quality = state.quality;
+  let events = state.events;
+  let discreteChanged = false;
+
+  const dtSec = 0.001;
+
+  for (let step = 0; step < stepsMs; step++) {
+    if (vehicles.length === 0) break;
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const v = vehicles[i];
+      const desiredNextX = v.x + v.speedUnitsPerSec * dtSec;
+      const clampedNextX =
+        i === 0 ? desiredNextX : Math.min(desiredNextX, vehicles[i - 1].x - MIN_VEHICLE_GAP);
+      const deltaX = Math.max(0, clampedNextX - v.x);
+      v.x = clampedNextX;
+      v.distanceTraveled += deltaX;
     }
-    idx++;
+
+    // Check bridge entries & exits in front-to-back order.
+    let occupancyChanged = false;
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const v = vehicles[i];
+
+      // Entry: triggers strictly once per vehicle when center reaches BRIDGE_ENTRY_X.
+      if (!v.hasEnteredBridge && v.x >= BRIDGE_ENTRY_X) {
+        v.hasEnteredBridge = true;
+        v.onBridge = v.x < BRIDGE_EXIT_X;
+        occupancyChanged = true;
+
+        // 1. Stress Current = total weight on bridge (including this entering vehicle) / capacity.
+        stressCurrent = normalizedLoad(activeBridgeWeight(vehicles), capacityTons);
+        // 2-3. Compare Stress Previous with Stress Current and reduce quality once.
+        const comparedPrevious = stressPrevious;
+        const dmg = applyEntryDamage(quality, comparedPrevious, stressCurrent);
+        quality = dmg.quality;
+        // 4. After the reduction, Stress Previous takes the value of Stress Current.
+        stressPrevious = stressCurrent;
+
+        const ev: QualityReductionEvent = {
+          vehicleId: v.id,
+          reduction: dmg.reduction,
+          actualLoss: dmg.actualLoss,
+          qualityAfter: quality,
+          stressCurrent,
+          stressPrevious: comparedPrevious,
+        };
+        events = [...events, ev];
+        discreteChanged = true;
+      } else if (v.onBridge && v.x >= BRIDGE_EXIT_X) {
+        // Exit: reduces Stress Current only; quality and Stress Previous do NOT change on exit.
+        v.onBridge = false;
+        occupancyChanged = true;
+        discreteChanged = true;
+      }
+    }
+
+    if (occupancyChanged) {
+      stressCurrent = normalizedLoad(activeBridgeWeight(vehicles), capacityTons);
+    }
+
+    // Despawn vehicles that have exited past the end of the approach road.
+    const beforeCount = vehicles.length;
+    vehicles = vehicles.filter((v) => v.x < ROAD_END_X);
+    if (vehicles.length !== beforeCount) {
+      discreteChanged = true;
+    }
   }
 
-  return { eventIndex: idx, stressLoad: load, stressMax, health, transitions };
-}
-
-export function cursorToSnapshot(s: ScenarioDef, cursor: SimCursor, tMs: number): SimSnapshot {
-  const vehicles = s.vehicles.map((v) => vehicleState(v, tMs));
-  const totalWeightTons = totalWeightAt(s, tMs);
   return {
-    timeMs: tMs,
-    vehicles,
-    occupantCount: vehicles.filter((v) => v.onBridge).length,
-    totalWeightTons,
-    stressLoad: cursor.stressLoad,
-    stressMax: cursor.stressMax,
-    health: cursor.health,
-    transitions: cursor.transitions,
+    state: {
+      ...state,
+      vehicles,
+      stressCurrent,
+      stressPrevious,
+      quality,
+      events,
+    },
+    discreteChanged,
   };
 }
 
-export function computeSnapshot(s: ScenarioDef, carry: CarryState, tMs: number): SimSnapshot {
-  const events = eventTimes(s);
-  const cursor = advanceCursor(s, events, createCursor(carry), tMs);
-  return cursorToSnapshot(s, cursor, tMs);
-}
-
-export function finalCarry(s: ScenarioDef, carry: CarryState): CarryState {
-  const snap = computeSnapshot(s, carry, s.durationMs);
-  return { stressMax: snap.stressMax, health: snap.health };
+export function engineToSnapshot(state: EngineState): SimSnapshot {
+  const totalWeightTons = activeBridgeWeight(state.vehicles);
+  const occupantCount = state.vehicles.filter((v) => v.onBridge).length;
+  return {
+    vehicles: state.vehicles,
+    occupantCount,
+    totalWeightTons,
+    capacityTons: state.capacityTons,
+    minQuality: state.minQuality,
+    stressCurrent: state.stressCurrent,
+    stressPrevious: state.stressPrevious,
+    quality: state.quality,
+    events: state.events,
+  };
 }

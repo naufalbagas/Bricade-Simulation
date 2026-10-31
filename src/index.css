@@ -1,10 +1,10 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-load: #1d5fd1;
-  --color-peak-fill: #d95b00;
-  --color-peak-ink: #b84a00;
-  --color-edge: #738093;
+  --color-load: #0284c7;
+  --color-peak-fill: #ea580c;
+  --color-peak-ink: #c2410c;
+  --color-edge: #cbd5e1;
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -15,14 +15,77 @@ body,
 }
 
 body {
-  @apply bg-white text-slate-900 antialiased;
+  @apply bg-slate-100 text-slate-900 antialiased;
 }
 
 .num {
   font-variant-numeric: tabular-nums;
 }
 
-@keyframes health-popover {
+/* Accessible 44px-tall draggable range input in light mode */
+.prop-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-height: 2.75rem;
+  background: transparent;
+  cursor: pointer;
+}
+
+.prop-slider:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+.prop-slider::-webkit-slider-runnable-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid #cbd5e1;
+  background: linear-gradient(
+    to right,
+    #0284c7 0%,
+    #0284c7 var(--slider-pct, 0%),
+    #e2e8f0 var(--slider-pct, 0%),
+    #e2e8f0 100%
+  );
+}
+
+.prop-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: -0.38rem;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid #0284c7;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+}
+
+.prop-slider::-moz-range-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid #cbd5e1;
+  background: #e2e8f0;
+}
+
+.prop-slider::-moz-range-progress {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: #0284c7;
+}
+
+.prop-slider::-moz-range-thumb {
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid #0284c7;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+}
+
+@keyframes quality-popover {
   0% {
     opacity: 0;
     transform: translateY(10px) scale(0.6);
@@ -45,12 +108,12 @@ body {
   }
 }
 
-.health-popover {
-  animation: health-popover 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+.quality-popover {
+  animation: quality-popover 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .health-popover {
+  .quality-popover {
     animation-duration: 1.2s;
     transform: none !important;
   }

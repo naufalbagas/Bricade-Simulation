@@ -1,57 +1,40 @@
-export type ScenarioId = 1 | 2 | 3;
+export type SimStatus = 'idle' | 'running';
 
-export type PlaybackStatus = 'idle' | 'running' | 'paused' | 'finished';
-
-// Integer milliseconds relative to scenario start keep boundary comparisons exact.
-export interface VehicleSpec {
-  id: string;
-  label: string;
+export interface VehicleSpawnInput {
   weightTons: number;
-  entryMs: number;
-  exitMs: number;
-  color: string;
+  speedKmh: number;
+  color?: string;
 }
 
-export type VehiclePhase = 'approaching' | 'on-bridge' | 'exited';
-
-export interface VehicleState {
-  id: string;
-  label: string;
+export interface VehicleEntity {
+  id: number;
   weightTons: number;
+  speedKmh: number;
+  speedUnitsPerSec: number;
   color: string;
   x: number;
-  speed: number;
+  distanceTraveled: number;
+  hasEnteredBridge: boolean;
   onBridge: boolean;
-  phase: VehiclePhase;
 }
 
-export interface ScenarioDef {
-  id: ScenarioId;
-  title: string;
-  durationMs: number;
-  vehicles: VehicleSpec[];
-}
-
-export interface CarryState {
-  stressMax: number;
-  health: number;
-}
-
-export interface LoadTransition {
-  timeMs: number;
-  prev: number;
-  next: number;
+export interface QualityReductionEvent {
+  vehicleId: number;
   reduction: number;
-  healthAfter: number;
+  actualLoss: number;
+  qualityAfter: number;
+  stressCurrent: number;
+  stressPrevious: number;
 }
 
 export interface SimSnapshot {
-  timeMs: number;
-  vehicles: VehicleState[];
+  vehicles: VehicleEntity[];
   occupantCount: number;
   totalWeightTons: number;
-  stressLoad: number;
-  stressMax: number;
-  health: number;
-  transitions: LoadTransition[];
+  capacityTons: number;
+  minQuality: number;
+  stressCurrent: number;
+  stressPrevious: number;
+  quality: number;
+  events: QualityReductionEvent[];
 }

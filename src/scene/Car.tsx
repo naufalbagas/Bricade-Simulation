@@ -2,8 +2,6 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { ROAD_END_X, ROAD_START_X, VEHICLE_LENGTH } from '../sim/constants';
-import { vehicleState } from '../sim/engine';
-import type { VehicleSpec } from '../sim/types';
 import { simStore } from '../useSim';
 
 const HALF_LEN = VEHICLE_LENGTH / 2;
@@ -22,7 +20,13 @@ function makeChassisGeometry() {
   s.lineTo(-HALF_LEN, 0.56);
   s.closePath();
 
-  const g = new THREE.ExtrudeGeometry(s, { depth: 1.22, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 1 });
+  const g = new THREE.ExtrudeGeometry(s, {
+    depth: 1.22,
+    bevelEnabled: true,
+    bevelThickness: 0.03,
+    bevelSize: 0.03,
+    bevelSegments: 1,
+  });
   g.translate(0, 0, -0.61);
   g.computeVertexNormals();
   return g;
@@ -73,22 +77,27 @@ const WHEELS: [number, number][] = [
   [-0.64, -0.58],
 ];
 
-// Places the car directly from elapsed simulation time so motion is frame-rate independent.
-export function Car({ spec }: { spec: VehicleSpec }) {
+// Reads live deterministic vehicle coordinates from SimStore so motion stays frame-rate independent.
+export function Car({ vehicleId, color }: { vehicleId: number; color: string }) {
   const group = useRef<THREE.Group>(null);
   const wheels = useRef<(THREE.Group | null)[]>([]);
   const plate = useRef<THREE.Mesh>(null);
   const pin = useRef<THREE.Mesh>(null);
   const paint = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.42, metalness: 0.16, flatShading: true }),
-    [spec.color],
+    () => new THREE.MeshStandardMaterial({ color, roughness: 0.42, metalness: 0.16, flatShading: true }),
+    [color],
   );
   useEffect(() => () => paint.dispose(), [paint]);
 
   useFrame(() => {
     const g = group.current;
     if (!g) return;
-    const v = vehicleState(spec, simStore.liveElapsedMs());
+    const v = simStore.getVehicleById(vehicleId);
+    if (!v) {
+      g.visible = false;
+      return;
+    }
+
     const fromStart = v.x - ROAD_START_X;
     const toEnd = ROAD_END_X - v.x;
     const visible = fromStart > 0 && toEnd > 0;
@@ -99,7 +108,7 @@ export function Car({ spec }: { spec: VehicleSpec }) {
     g.scale.setScalar(s);
     g.position.x = v.x;
 
-    const spin = -(v.x - ROAD_START_X) / WHEEL_R;
+    const spin = -v.distanceTraveled / WHEEL_R;
     wheels.current.forEach((w) => {
       if (w) w.rotation.z = spin;
     });
